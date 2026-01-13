@@ -1,0 +1,93 @@
+# .github/workflows/reusable-dotnet-appservice-multi.yml
+name: Reusable .NET → Azure App Service (multi-region, multi-instance)
+
+on:
+  workflow_call:
+    inputs:
+      project_path:       { required: true, type: string }  # e.g., MDUPortal/MDUPortal.csproj
+      deployment_config:  { required: true, type: string }  # JSON: [{"rg":"rg-uk","apps":"app1;app2"},{"rg":"rg-de","apps":"app3;app4"}]
+      dotnet_version:     { required: false, type: string, default: '9.0.x' }
+    secrets:
+      AZURE_TENANT_ID:       { required: true }
+      AZURE_SUBSCRIPTION_ID: { required: true }
+      AZURE_CLIENT_ID:       { required: true }
+
+jobs:
+  build-test-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+      
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
+      
+      - name: Restore
+        run: dotnet restore "${{ inputs.project_path }}"
+      
+      - name: Build
+        run: dotnet build "${{ inputs.project_path }}" -c Release --no-restore
+      
+      # Non-blocking tests now; make blocking later by removing 'continue-on-error'
+      - name: Test (non-blocking until tests exist)
+        continue-on-error: true
+        run: |
+          if ls **/*Tests*.csproj 1> /dev/null 2>&1; then
+            dotnet test -c Release --no-build
+          else
+            echo "No tests yet. Add tests and make this step required later."
+          fi
+      
+      - name: Publish
+        run: |
+          mkdir -p out
+          dotnet publish "${{ inputs.project_path }}" -c Release -o out
+      
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+      
+      - name: Deploy to multiple regions and instances
+        shell: bash
+        run: |
+          echo "Deployment configuration: ${{ inputs.deployment_config }}"
+          
+          # Parse JSON deployment config
+          echo '${{ inputs.deployment_config }}' | jq -c '.[]' | while read region; do
+            RESOURCE_GROUP=$(echo $region | jq -r '.rg')
+            WEBAPPS_CSV=$(echo $region | jq -r '.apps')
+            
+            echo "🌍 Deploying to region: $RESOURCE_GROUP"
+            
+            # Deploy to all apps in this resource group
+            IFS=';' read -ra APPS <<< "$WEBAPPS_CSV"
+            for APP in "${APPS[@]}"; do
+              echo "  📦 Deploying to $APP in $RESOURCE_GROUP..."
+              az webapp deploy \
+                --resource-group "$RESOURCE_GROUP" \
+                --name "$APP" \
+                --src-path "out" \
+                --type zip
+              
+              if [ $? -eq 0 ]; then
+                echo "  ✅ Successfully deployed to $APP"
+              else
+                echo "  ❌ Failed to deploy to $APP"
+                exit 1
+              fi
+            done
+            
+            echo "✅ Completed deployment to $RESOURCE_GROUP"
+          done
+          
+          echo "🎉 All deployments completed successfully!"
