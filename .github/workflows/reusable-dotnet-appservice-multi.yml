@@ -32,6 +32,57 @@ jobs:
       - name: Restore
         run: dotnet restore "${{ inputs.project_path }}"
       
+      - name: Update version in appsettings.json
+        shell: bash
+        run: |
+          # Extract project directory from project path
+          PROJECT_DIR=$(dirname "${{ inputs.project_path }}")
+          APPSETTINGS_FILE="$PROJECT_DIR/appsettings.json"
+          
+          echo "📝 Updating version in $APPSETTINGS_FILE"
+          
+          # Generate version using date format YY.MM.DDx
+          CURRENT_DATE=$(date +"%y.%m.%d")
+          
+          # Check if appsettings.json exists
+          if [ ! -f "$APPSETTINGS_FILE" ]; then
+            echo "❌ appsettings.json not found at $APPSETTINGS_FILE"
+            exit 1
+          fi
+          
+          # Check if there's already a version for today
+          EXISTING_VERSION=$(jq -r '.Version // empty' "$APPSETTINGS_FILE")
+          echo "Current version: $EXISTING_VERSION"
+          
+          if [[ "$EXISTING_VERSION" == "$CURRENT_DATE"* ]]; then
+            # Extract the letter suffix (a, b, c, etc.)
+            SUFFIX=$(echo "$EXISTING_VERSION" | sed "s/$CURRENT_DATE//")
+            if [ -z "$SUFFIX" ]; then
+              NEW_VERSION="${CURRENT_DATE}a"
+            else
+              # Increment the letter (a->b, b->c, etc.)
+              NEXT_LETTER=$(echo "$SUFFIX" | tr 'a-y' 'b-z')
+              if [ "$NEXT_LETTER" = "$SUFFIX" ]; then
+                # If we're at 'z', go to 'aa'
+                NEW_VERSION="${CURRENT_DATE}aa"
+              else
+                NEW_VERSION="${CURRENT_DATE}${NEXT_LETTER}"
+              fi
+            fi
+          else
+            # First version of the day
+            NEW_VERSION="${CURRENT_DATE}a"
+          fi
+          
+          echo "New version: $NEW_VERSION"
+          
+          # Update the version in appsettings.json
+          jq --arg version "$NEW_VERSION" '.Version = $version' "$APPSETTINGS_FILE" > temp.json && mv temp.json "$APPSETTINGS_FILE"
+          
+          echo "✅ Updated version to $NEW_VERSION"
+          echo "📄 Updated appsettings.json:"
+          jq '.Version' "$APPSETTINGS_FILE"
+      
       - name: Build
         run: dotnet build "${{ inputs.project_path }}" -c Release --no-restore
       
