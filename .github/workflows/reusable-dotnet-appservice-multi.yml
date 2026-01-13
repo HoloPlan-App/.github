@@ -55,8 +55,7 @@ jobs:
         with:
           tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
-      
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}     
       - name: Deploy to multiple regions and instances
         shell: bash
         run: |
@@ -76,7 +75,7 @@ jobs:
               az webapp deploy \
                 --resource-group "$RESOURCE_GROUP" \
                 --name "$APP" \
-                --src-path "out" \
+                --src-path "$GITHUB_WORKSPACE/out" \
                 --type zip
               
               if [ $? -eq 0 ]; then
