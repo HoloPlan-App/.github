@@ -106,8 +106,23 @@ jobs:
             echo "✅ Committed and pushed version update"
           fi
       
-      - name: Build
-        run: dotnet build "${{ inputs.project_path }}" -c Release --no-restore
+      - name: Check project configuration
+        run: |
+          echo "🔍 Checking project file configuration..."
+          PROJECT_FILE="${{ inputs.project_path }}"
+          echo "Project file: $PROJECT_FILE"
+          
+          if [ -f "$PROJECT_FILE" ]; then
+            echo "📄 Project file contents:"
+            cat "$PROJECT_FILE"
+            
+            echo ""
+            echo "🔍 Checking for publish-related settings:"
+            grep -i "publish\|content\|copytooutput\|embed" "$PROJECT_FILE" || echo "No publish-related settings found"
+          else
+            echo "❌ Project file not found: $PROJECT_FILE"
+            exit 1
+          fi
       
       # Non-blocking tests now; make blocking later by removing 'continue-on-error'
       - name: Test (non-blocking until tests exist)
@@ -125,6 +140,18 @@ jobs:
           dotnet publish "${{ inputs.project_path }}" -c Release -o out
           echo "📁 Contents of out directory:"
           ls -la out/
+          
+          # Check for specific file types that should be there
+          echo "� CheckBing for key file types in out/:"
+          echo "Views (.cshtml files):"
+          find out/ -name "*.cshtml" | head -10 || echo "No .cshtml files found"
+          echo "Static files (wwwroot content):"
+          find out/wwwroot -type f | head -10 2>/dev/null || echo "No wwwroot content found"
+          echo "Configuration files:"
+          find out/ -name "appsettings*.json" || echo "No appsettings files found"
+          echo "Main executable:"
+          find out/ -name "*.dll" | grep -E "(MDUPortal|$(basename '${{ inputs.project_path }}' .csproj))" || echo "Main DLL not found"
+          
           echo "📁 Current working directory:"
           pwd
           echo "📁 GITHUB_WORKSPACE contents:"
@@ -156,10 +183,25 @@ jobs:
           # Create ZIP file from out directory
           echo "📦 Creating deployment package..."
           cd out
+          
+          # List what's being packaged
+          echo "📋 Files being packaged:"
+          ls -laR | head -50
+          
+          # Check for key files
+          echo "🔍 Checking for key files:"
+          ls -la *.dll 2>/dev/null | head -10 || echo "No DLL files found"
+          ls -la appsettings*.json 2>/dev/null || echo "No appsettings files found"
+          ls -la web.config 2>/dev/null || echo "No web.config found"
+          
           zip -r ../deployment.zip .
           cd ..
           echo "✅ Created deployment.zip"
-          ls -la deployment.zip
+          ls -lh deployment.zip
+          
+          # Show what's in the ZIP
+          echo "📦 Contents of deployment.zip (first 30 files):"
+          unzip -l deployment.zip | head -30
           
           # Parse JSON deployment config
           echo '${{ inputs.deployment_config }}' | jq -c '.[]' | while read region; do
@@ -172,14 +214,23 @@ jobs:
             IFS=';' read -ra APPS <<< "$WEBAPPS_CSV"
             for APP in "${APPS[@]}"; do
               echo "  📦 Deploying to $APP in $RESOURCE_GROUP..."
+              
+              # Deploy the ZIP file
               az webapp deploy \
                 --resource-group "$RESOURCE_GROUP" \
                 --name "$APP" \
                 --src-path "./deployment.zip" \
-                --type zip
+                --type zip \
+                --async false
               
               if [ $? -eq 0 ]; then
                 echo "  ✅ Successfully deployed to $APP"
+                
+                # Force restart the app to ensure changes take effect
+                echo "  🔄 Restarting app to ensure changes take effect..."
+                az webapp restart --name "$APP" --resource-group "$RESOURCE_GROUP"
+                echo "  ✅ App restarted"
+                
               else
                 echo "  ❌ Failed to deploy to $APP"
                 exit 1
@@ -191,8 +242,8 @@ jobs:
           
           echo "🎉 All deployments completed successfully!"
           
-          # Verify deployment by checking the site
-          echo "🔍 Verifying deployment..."
+          # Enhanced deployment verification and debugging
+          echo "🔍 Verifying deployment and debugging..."
           sleep 30  # Wait for deployment to propagate
           
           # Parse JSON again to verify each app
@@ -202,18 +253,48 @@ jobs:
             
             IFS=';' read -ra APPS <<< "$WEBAPPS_CSV"
             for APP in "${APPS[@]}"; do
-              echo "🌐 Checking $APP..."
+              echo "🌐 Debugging deployment for $APP..."
+              
+              # Get app details
               APP_URL=$(az webapp show --name "$APP" --resource-group "$RESOURCE_GROUP" --query "defaultHostName" -o tsv)
               echo "App URL: https://$APP_URL"
               
-              # Try to get the site status
+              # Check deployment status
+              echo "📋 Deployment status:"
+              az webapp deployment list --name "$APP" --resource-group "$RESOURCE_GROUP" --query "[0].{status:status,active:active,message:message,received_time:received_time}" -o table
+              
+              # Check if there are multiple deployment slots
+              echo "🎰 Checking deployment slots:"
+              az webapp deployment slot list --name "$APP" --resource-group "$RESOURCE_GROUP" -o table || echo "No additional slots found"
+              
+              # Check app settings for any deployment-related configs
+              echo "⚙️ Checking key app settings:"
+              az webapp config appsettings list --name "$APP" --resource-group "$RESOURCE_GROUP" --query "[?contains(name, 'WEBSITE_') || contains(name, 'SCM_')].{name:name,value:value}" -o table
+              
+              # Check the site's response and headers
+              echo "🌐 Testing site response:"
               HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://$APP_URL" || echo "000")
               echo "HTTP Status: $HTTP_STATUS"
+              
+              # Get response headers to check for caching issues
+              echo "📄 Response headers:"
+              curl -s -I "https://$APP_URL" | head -10
+              
+              # Try to check if the version endpoint exists (if you have one)
+              echo "🔢 Checking for version info:"
+              curl -s "https://$APP_URL/api/version" || echo "No version endpoint found"
+              
+              # Check the Kudu site (SCM) for deployment logs
+              echo "🔧 Checking Kudu deployment info:"
+              KUDU_URL="https://$APP.scm.azurewebsites.net"
+              echo "Kudu URL: $KUDU_URL"
               
               if [ "$HTTP_STATUS" = "200" ]; then
                 echo "✅ $APP is responding"
               else
                 echo "⚠️ $APP returned status $HTTP_STATUS"
               fi
+              
+              echo "----------------------------------------"
             done
           done
