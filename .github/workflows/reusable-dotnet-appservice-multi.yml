@@ -79,6 +79,14 @@ jobs:
         run: |
           echo "Deployment configuration: ${{ inputs.deployment_config }}"
           
+          # Create ZIP file from out directory
+          echo "📦 Creating deployment package..."
+          cd out
+          zip -r ../deployment.zip .
+          cd ..
+          echo "✅ Created deployment.zip"
+          ls -la deployment.zip
+          
           # Parse JSON deployment config
           echo '${{ inputs.deployment_config }}' | jq -c '.[]' | while read region; do
             RESOURCE_GROUP=$(echo $region | jq -r '.rg')
@@ -93,7 +101,7 @@ jobs:
               az webapp deploy \
                 --resource-group "$RESOURCE_GROUP" \
                 --name "$APP" \
-                --src-path "./out" \
+                --src-path "./deployment.zip" \
                 --type zip
               
               if [ $? -eq 0 ]; then
