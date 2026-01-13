@@ -185,24 +185,40 @@ jobs:
           echo "📦 Creating deployment package..."
           cd out
           
-          # List what's being packaged
-          echo "📋 Files being packaged:"
-          ls -laR | head -50
+          # List what's being packaged (simplified)
+          echo "📋 Top-level contents:"
+          ls -lh
           
           # Check for key files
           echo "🔍 Checking for key files:"
-          ls -la *.dll 2>/dev/null | head -10 || echo "No DLL files found"
+          ls -la *.dll 2>/dev/null | head -5 || echo "No DLL files found"
           ls -la appsettings*.json 2>/dev/null || echo "No appsettings files found"
           ls -la web.config 2>/dev/null || echo "No web.config found"
+          
+          # Check for Pages directory
+          if [ -d "Pages" ]; then
+            echo "✅ Pages directory exists"
+            find Pages -name "*.cshtml" | head -5
+          else
+            echo "❌ Pages directory not found"
+          fi
+          
+          # Check for wwwroot
+          if [ -d "wwwroot" ]; then
+            echo "✅ wwwroot directory exists"
+            ls -lh wwwroot/ | head -5
+          else
+            echo "❌ wwwroot directory not found"
+          fi
           
           zip -r ../deployment.zip .
           cd ..
           echo "✅ Created deployment.zip"
           ls -lh deployment.zip
           
-          # Show what's in the ZIP
-          echo "📦 Contents of deployment.zip (first 30 files):"
-          unzip -l deployment.zip | head -30
+          # Show what's in the ZIP (summary only)
+          echo "📦 ZIP file summary:"
+          unzip -l deployment.zip | tail -1
           
           # Parse JSON deployment config
           echo '${{ inputs.deployment_config }}' | jq -c '.[]' | while read region; do
