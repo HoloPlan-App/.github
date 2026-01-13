@@ -82,6 +82,26 @@ jobs:
           echo "✅ Updated version to $NEW_VERSION"
           echo "📄 Updated appsettings.json:"
           jq '.Version' "$APPSETTINGS_FILE"
+          
+          # Set the new version as an output for later steps
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "appsettings_file=$APPSETTINGS_FILE" >> $GITHUB_OUTPUT
+        id: version_update
+      
+      - name: Commit version update
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add "${{ steps.version_update.outputs.appsettings_file }}"
+          
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Auto-update version to ${{ steps.version_update.outputs.new_version }} [skip ci]"
+            git push
+            echo "✅ Committed and pushed version update"
+          fi
       
       - name: Build
         run: dotnet build "${{ inputs.project_path }}" -c Release --no-restore
