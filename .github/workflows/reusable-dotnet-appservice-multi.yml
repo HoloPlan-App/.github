@@ -51,7 +51,7 @@ jobs:
           fi
           
           # Check if there's already a version for today
-          EXISTING_VERSION=$(jq -r '.Version // empty' "$APPSETTINGS_FILE")
+          EXISTING_VERSION=$(jq -r '.Application.Version // empty' "$APPSETTINGS_FILE")
           echo "Current version: $EXISTING_VERSION"
           
           if [[ "$EXISTING_VERSION" == "$CURRENT_DATE"* ]]; then
@@ -77,11 +77,11 @@ jobs:
           echo "New version: $NEW_VERSION"
           
           # Update the version in appsettings.json
-          jq --arg version "$NEW_VERSION" '.Version = $version' "$APPSETTINGS_FILE" > temp.json && mv temp.json "$APPSETTINGS_FILE"
+          jq --arg version "$NEW_VERSION" '.Application.Version = $version' "$APPSETTINGS_FILE" > temp.json && mv temp.json "$APPSETTINGS_FILE"
           
           echo "✅ Updated version to $NEW_VERSION"
           echo "📄 Updated appsettings.json:"
-          jq '.Version' "$APPSETTINGS_FILE"
+          jq '.Application.Version' "$APPSETTINGS_FILE"
           
           # Set the new version as an output for later steps
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
@@ -187,3 +187,30 @@ jobs:
           done
           
           echo "🎉 All deployments completed successfully!"
+          
+          # Verify deployment by checking the site
+          echo "🔍 Verifying deployment..."
+          sleep 30  # Wait for deployment to propagate
+          
+          # Parse JSON again to verify each app
+          echo '${{ inputs.deployment_config }}' | jq -c '.[]' | while read region; do
+            RESOURCE_GROUP=$(echo $region | jq -r '.rg')
+            WEBAPPS_CSV=$(echo $region | jq -r '.apps')
+            
+            IFS=';' read -ra APPS <<< "$WEBAPPS_CSV"
+            for APP in "${APPS[@]}"; do
+              echo "🌐 Checking $APP..."
+              APP_URL=$(az webapp show --name "$APP" --resource-group "$RESOURCE_GROUP" --query "defaultHostName" -o tsv)
+              echo "App URL: https://$APP_URL"
+              
+              # Try to get the site status
+              HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://$APP_URL" || echo "000")
+              echo "HTTP Status: $HTTP_STATUS"
+              
+              if [ "$HTTP_STATUS" = "200" ]; then
+                echo "✅ $APP is responding"
+              else
+                echo "⚠️ $APP returned status $HTTP_STATUS"
+              fi
+            done
+          done
