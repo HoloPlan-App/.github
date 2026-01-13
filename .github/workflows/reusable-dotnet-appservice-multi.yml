@@ -15,8 +15,14 @@ on:
 jobs:
   build-test-deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Allow pushing commits back to repo
+      id-token: write  # For OIDC authentication
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ github.token }}
+          fetch-depth: 0  # Fetch full history for proper git operations
       
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
