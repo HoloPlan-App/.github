@@ -92,6 +92,7 @@ jobs:
         id: version_update
       
       - name: Commit version update
+        continue-on-error: true  # Don't fail deployment if version commit fails
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
@@ -101,25 +102,8 @@ jobs:
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
-            # Pull latest changes to avoid conflicts
-            echo "🔄 Pulling latest changes before committing..."
-            git fetch origin dev
-            
-            # Try to rebase first (cleaner history)
-            if git rebase origin/dev; then
-              echo "✅ Successfully rebased"
-            else
-              echo "⚠️ Rebase failed, aborting and trying merge..."
-              git rebase --abort
-              git merge origin/dev --no-edit || {
-                echo "❌ Merge failed, skipping version commit to avoid conflicts"
-                git reset --hard HEAD
-                exit 0
-              }
-            fi
-            
             git commit -m "Auto-update version to ${{ steps.version_update.outputs.new_version }} [skip ci]"
-            git push origin dev
+            git push
             echo "✅ Committed and pushed version update"
           fi
       
