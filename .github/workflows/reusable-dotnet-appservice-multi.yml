@@ -155,12 +155,11 @@ jobs:
             for APP in "${APPS[@]}"; do
               echo "  📦 Deploying to $APP..."
               
-              az webapp deploy \
+              # Use config-zip which properly deploys to site/wwwroot
+              az webapp deployment source config-zip \
                 --resource-group "$RESOURCE_GROUP" \
                 --name "$APP" \
-                --src-path "./deployment.zip" \
-                --type zip \
-                --async false
+                --src "./deployment.zip"
               
               if [ $? -eq 0 ]; then
                 echo "  ✅ Deployed to $APP"
