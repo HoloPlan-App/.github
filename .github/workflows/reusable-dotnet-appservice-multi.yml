@@ -155,18 +155,18 @@ jobs:
             for APP in "${APPS[@]}"; do
               echo "  📦 Deploying to $APP..."
               
-              # Use config-zip which properly deploys to site/wwwroot
-              az webapp deployment source config-zip \
+              # Use az webapp deploy with clean flag to ensure proper deployment
+              az webapp deploy \
                 --resource-group "$RESOURCE_GROUP" \
                 --name "$APP" \
-                --src "./deployment.zip"
+                --src-path "./deployment.zip" \
+                --type zip \
+                --clean true \
+                --restart true \
+                --async false
               
               if [ $? -eq 0 ]; then
                 echo "  ✅ Deployed to $APP"
-                
-                echo "  🔄 Restarting $APP..."
-                az webapp restart --name "$APP" --resource-group "$RESOURCE_GROUP"
-                echo "  ✅ Restarted"
               else
                 echo "  ❌ Failed to deploy to $APP"
                 exit 1
