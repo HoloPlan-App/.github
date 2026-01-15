@@ -140,8 +140,14 @@ jobs:
           test -d Pages && echo "✅ Pages in package" || echo "❌ Pages missing"
           test -d wwwroot && echo "✅ wwwroot in package" || echo "❌ wwwroot missing"
           
-          # Create ZIP excluding _logs if it exists
-          zip -r ../deployment.zip . -x "_logs/*" "*.log"
+          # Remove _logs if it exists (shouldn't be there but just in case)
+          if [ -d "_logs" ]; then
+            echo "⚠️ Removing _logs directory from publish output"
+            rm -rf _logs
+          fi
+          
+          # Create ZIP
+          zip -r ../deployment.zip .
           cd ..
           
           echo "✅ Created deployment.zip ($(du -h deployment.zip | cut -f1))"
@@ -156,6 +162,10 @@ jobs:
             for APP in "${APPS[@]}"; do
               echo "  📦 Deploying to $APP..."
               
+              # Stop the app first to release file locks (especially log files)
+              echo "  ⏸️ Stopping $APP to release file locks..."
+              az webapp stop --name "$APP" --resource-group "$RESOURCE_GROUP"
+              
               # Use az webapp deploy with clean flag to ensure proper deployment
               az webapp deploy \
                 --resource-group "$RESOURCE_GROUP" \
@@ -167,9 +177,11 @@ jobs:
                 --async false
               
               if [ $? -eq 0 ]; then
-                echo "  ✅ Deployed to $APP"
+                echo "  ✅ Deployed to $APP (app will restart automatically)"
               else
                 echo "  ❌ Failed to deploy to $APP"
+                # Start the app even if deployment failed
+                az webapp start --name "$APP" --resource-group "$RESOURCE_GROUP"
                 exit 1
               fi
             done
