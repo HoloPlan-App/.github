@@ -140,7 +140,8 @@ jobs:
           test -d Pages && echo "✅ Pages in package" || echo "❌ Pages missing"
           test -d wwwroot && echo "✅ wwwroot in package" || echo "❌ wwwroot missing"
           
-          zip -r ../deployment.zip .
+          # Create ZIP excluding _logs if it exists
+          zip -r ../deployment.zip . -x "_logs/*" "*.log"
           cd ..
           
           echo "✅ Created deployment.zip ($(du -h deployment.zip | cut -f1))"
