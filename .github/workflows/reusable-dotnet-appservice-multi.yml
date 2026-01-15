@@ -166,7 +166,8 @@ jobs:
               echo "  ⏸️ Stopping $APP to release file locks..."
               az webapp stop --name "$APP" --resource-group "$RESOURCE_GROUP"
               
-              # Use az webapp deploy with clean flag to ensure proper deployment
+              # Use az webapp deploy with clean flag and increased timeout
+              echo "  📦 Deploying (this may take a few minutes for large packages)..."
               az webapp deploy \
                 --resource-group "$RESOURCE_GROUP" \
                 --name "$APP" \
@@ -174,9 +175,13 @@ jobs:
                 --type zip \
                 --clean true \
                 --restart true \
-                --async false
+                --async false \
+                --timeout 1200
               
-              if [ $? -eq 0 ]; then
+              DEPLOY_RESULT=$?
+              DEPLOY_RESULT=$?
+              
+              if [ $DEPLOY_RESULT -eq 0 ]; then
                 echo "  ✅ Deployed to $APP"
                 
                 # Ensure app is started (in case --restart true didn't work)
@@ -184,11 +189,24 @@ jobs:
                 az webapp start --name "$APP" --resource-group "$RESOURCE_GROUP"
                 echo "  ✅ App is running"
               else
-                echo "  ❌ Failed to deploy to $APP"
-                # Start the app even if deployment failed
-                echo "  ▶️ Starting $APP after failed deployment..."
+                echo "  ⚠️ Deployment command failed or timed out"
+                echo "  🔍 Checking deployment status via Kudu API..."
+                
+                # Check if deployment actually succeeded via Kudu
+                sleep 10
+                KUDU_STATUS=$(curl -s "https://$APP.scm.azurewebsites.net/api/deployments/latest" | jq -r '.status // "unknown"')
+                echo "  Kudu deployment status: $KUDU_STATUS"
+                
+                # Start the app regardless
+                echo "  ▶️ Starting $APP..."
                 az webapp start --name "$APP" --resource-group "$RESOURCE_GROUP"
-                exit 1
+                
+                if [ "$KUDU_STATUS" = "4" ] || [ "$KUDU_STATUS" = "Success" ]; then
+                  echo "  ✅ Deployment actually succeeded (timeout was false alarm)"
+                else
+                  echo "  ❌ Deployment genuinely failed"
+                  exit 1
+                fi
               fi
             done
             
