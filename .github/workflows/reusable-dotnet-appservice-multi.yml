@@ -177,10 +177,16 @@ jobs:
                 --async false
               
               if [ $? -eq 0 ]; then
-                echo "  ✅ Deployed to $APP (app will restart automatically)"
+                echo "  ✅ Deployed to $APP"
+                
+                # Ensure app is started (in case --restart true didn't work)
+                echo "  ▶️ Ensuring $APP is running..."
+                az webapp start --name "$APP" --resource-group "$RESOURCE_GROUP"
+                echo "  ✅ App is running"
               else
                 echo "  ❌ Failed to deploy to $APP"
                 # Start the app even if deployment failed
+                echo "  ▶️ Starting $APP after failed deployment..."
                 az webapp start --name "$APP" --resource-group "$RESOURCE_GROUP"
                 exit 1
               fi
