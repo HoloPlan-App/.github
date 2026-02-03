@@ -129,11 +129,9 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           client-id:       ${{ secrets.AZURE_CLIENT_ID }}
       
-      - name: Deploy to multiple regions and instances
+      - name: Prepare deployment package
         shell: bash
         run: |
-          echo "Deployment configuration: ${{ inputs.deployment_config }}"
-          
           cd out
           
           echo "📦 Creating deployment package..."
@@ -151,6 +149,11 @@ jobs:
           cd ..
           
           echo "✅ Created deployment.zip ($(du -h deployment.zip | cut -f1))"
+      
+      - name: Deploy to multiple regions and instances
+        shell: bash
+        run: |
+          echo "Deployment configuration: ${{ inputs.deployment_config }}"
           
           echo '${{ inputs.deployment_config }}' | jq -c '.[]' | while read region; do
             RESOURCE_GROUP=$(echo $region | jq -r '.rg')
@@ -162,12 +165,12 @@ jobs:
             for APP in "${APPS[@]}"; do
               echo "  📦 Deploying to $APP..."
               
-              # Stop the app first to release file locks (especially log files)
+              # Stop the app first to release file locks
               echo "  ⏸️ Stopping $APP to release file locks..."
               az webapp stop --name "$APP" --resource-group "$RESOURCE_GROUP"
               
-              # Use az webapp deploy with clean flag and increased timeout
-              echo "  📦 Deploying (this may take a few minutes for large packages)..."
+              # Use az webapp deploy with clean flag
+              echo "  📦 Deploying (this may take a few minutes)..."
               az webapp deploy \
                 --resource-group "$RESOURCE_GROUP" \
                 --name "$APP" \
@@ -179,12 +182,11 @@ jobs:
                 --timeout 1200
               
               DEPLOY_RESULT=$?
-              DEPLOY_RESULT=$?
               
               if [ $DEPLOY_RESULT -eq 0 ]; then
                 echo "  ✅ Deployed to $APP"
                 
-                # Ensure app is started (in case --restart true didn't work)
+                # Ensure app is started
                 echo "  ▶️ Ensuring $APP is running..."
                 az webapp start --name "$APP" --resource-group "$RESOURCE_GROUP"
                 echo "  ✅ App is running"
@@ -214,3 +216,60 @@ jobs:
           done
           
           echo "🎉 All deployments completed!"
+      
+      - name: Create GitHub Deployment Records
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "📝 Creating GitHub deployment records..."
+          
+          echo '${{ inputs.deployment_config }}' | jq -c '.[]' | while read region; do
+            RESOURCE_GROUP=$(echo $region | jq -r '.rg')
+            WEBAPPS_CSV=$(echo $region | jq -r '.apps')
+            
+            IFS=';' read -ra APPS <<< "$WEBAPPS_CSV"
+            for APP in "${APPS[@]}"; do
+              # Determine environment name based on resource group
+              if [[ "$RESOURCE_GROUP" == *"dev"* ]]; then
+                ENV_NAME="Dev"
+              elif [[ "$RESOURCE_GROUP" == *"prod"* ]] || [[ "$RESOURCE_GROUP" == "MDU" ]]; then
+                ENV_NAME="Prod"
+              else
+                ENV_NAME="$RESOURCE_GROUP"
+              fi
+              
+              echo "  📝 Creating deployment record for $APP in $ENV_NAME..."
+              
+              # Create deployment
+              DEPLOYMENT_ID=$(gh api \
+                --method POST \
+                -H "Accept: application/vnd.github+json" \
+                /repos/${{ github.repository }}/deployments \
+                -f ref='${{ github.ref }}' \
+                -f environment="$ENV_NAME" \
+                -f description="Deploy to $APP" \
+                -f auto_merge=false \
+                -f required_contexts='[]' \
+                --jq '.id')
+              
+              if [ -n "$DEPLOYMENT_ID" ]; then
+                echo "  ✅ Created deployment $DEPLOYMENT_ID"
+                
+                # Mark deployment as successful
+                gh api \
+                  --method POST \
+                  -H "Accept: application/vnd.github+json" \
+                  /repos/${{ github.repository }}/deployments/$DEPLOYMENT_ID/statuses \
+                  -f state='success' \
+                  -f environment="$ENV_NAME" \
+                  -f description="Successfully deployed to $APP" \
+                  -f log_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                
+                echo "  ✅ Marked deployment as successful"
+              else
+                echo "  ⚠️ Failed to create deployment record"
+              fi
+            done
+          done
