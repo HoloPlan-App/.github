@@ -231,7 +231,6 @@ jobs:
             
             IFS=';' read -ra APPS <<< "$WEBAPPS_CSV"
             for APP in "${APPS[@]}"; do
-              # Determine environment name based on resource group
               if [[ "$RESOURCE_GROUP" == *"dev"* ]]; then
                 ENV_NAME="Dev"
               elif [[ "$RESOURCE_GROUP" == *"prod"* ]] || [[ "$RESOURCE_GROUP" == "MDU" ]]; then
@@ -242,34 +241,31 @@ jobs:
               
               echo "  📝 Creating deployment record for $APP in $ENV_NAME..."
               
-              # Create deployment
-              DEPLOYMENT_ID=$(gh api \
-                --method POST \
-                -H "Accept: application/vnd.github+json" \
-                /repos/${{ github.repository }}/deployments \
-                -f ref='${{ github.ref }}' \
-                -f environment="$ENV_NAME" \
-                -f description="Deploy to $APP" \
-                -f auto_merge=false \
-                -f required_contexts='[]' \
-                --jq '.id')
+              DEPLOYMENT_ID=$(jq -n \
+                --arg ref "${{ github.ref }}" \
+                --arg env "$ENV_NAME" \
+                --arg desc "Deploy to $APP" \
+                '{ref: $ref, environment: $env, description: $desc, auto_merge: false, required_contexts: []}' | \
+                gh api --method POST \
+                  -H "Accept: application/vnd.github+json" \
+                  /repos/${{ github.repository }}/deployments \
+                  --input - --jq '.id' 2>/dev/null || echo "")
               
               if [ -n "$DEPLOYMENT_ID" ]; then
                 echo "  ✅ Created deployment $DEPLOYMENT_ID"
                 
-                # Mark deployment as successful
-                gh api \
-                  --method POST \
+                gh api --method POST \
                   -H "Accept: application/vnd.github+json" \
                   /repos/${{ github.repository }}/deployments/$DEPLOYMENT_ID/statuses \
                   -f state='success' \
                   -f environment="$ENV_NAME" \
                   -f description="Successfully deployed to $APP" \
-                  -f log_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-                
-                echo "  ✅ Marked deployment as successful"
+                  -f log_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+                  2>/dev/null && echo "  ✅ Marked deployment as successful" || echo "  ⚠️ Failed to update status"
               else
-                echo "  ⚠️ Failed to create deployment record"
+                echo "  ⚠️ Failed to create deployment record (non-blocking)"
               fi
             done
           done
+          
+          echo "✅ Deployment tracking complete"
