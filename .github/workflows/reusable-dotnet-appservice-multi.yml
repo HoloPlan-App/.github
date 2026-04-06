@@ -35,23 +35,20 @@ jobs:
       - name: Restore
         run: dotnet restore "${{ inputs.project_path }}"
       
-      - name: Update version in appsettings.json
+      - name: Stamp version into appsettings.json (build-time only, not committed)
         shell: bash
         run: |
           PROJECT_DIR=$(dirname "${{ inputs.project_path }}")
           APPSETTINGS_FILE="$PROJECT_DIR/appsettings.json"
-          
-          echo "📝 Updating version in $APPSETTINGS_FILE"
-          
-          CURRENT_DATE=$(date +"%y.%m.%d")
           
           if [ ! -f "$APPSETTINGS_FILE" ]; then
             echo "❌ appsettings.json not found"
             exit 1
           fi
           
+          CURRENT_DATE=$(date +"%y.%m.%d")
           EXISTING_VERSION=$(jq -r '.Application.Version // empty' "$APPSETTINGS_FILE")
-          echo "Current version: $EXISTING_VERSION"
+          echo "Current version in source: $EXISTING_VERSION"
           
           if [[ "$EXISTING_VERSION" == "$CURRENT_DATE"* ]]; then
             SUFFIX=$(echo "$EXISTING_VERSION" | sed "s/$CURRENT_DATE//")
@@ -69,30 +66,9 @@ jobs:
             NEW_VERSION="${CURRENT_DATE}a"
           fi
           
-          echo "New version: $NEW_VERSION"
-          
+          echo "Stamping build version: $NEW_VERSION"
           jq --arg version "$NEW_VERSION" '.Application.Version = $version' "$APPSETTINGS_FILE" > temp.json && mv temp.json "$APPSETTINGS_FILE"
-          
-          echo "✅ Updated version to $NEW_VERSION"
-          
-          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "appsettings_file=$APPSETTINGS_FILE" >> $GITHUB_OUTPUT
-        id: version_update
-      
-      - name: Commit version update
-        continue-on-error: true
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add "${{ steps.version_update.outputs.appsettings_file }}"
-          
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "Auto-update version to ${{ steps.version_update.outputs.new_version }} [skip ci]"
-            git push
-            echo "✅ Committed and pushed version update"
-          fi
+          echo "✅ Version stamped (build-time only, not committed to repo)"
       
       - name: Check project configuration
         run: |
