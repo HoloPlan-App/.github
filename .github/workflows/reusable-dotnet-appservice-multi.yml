@@ -85,15 +85,25 @@ jobs:
         run: |
           dotnet publish "${{ inputs.project_path }}" -c Release -o out --no-restore
 
-          jq -n \
+          BUILD_INFO=$(jq -n \
             --arg sha "${{ github.sha }}" \
             --arg short_sha "${{ steps.version.outputs.short_sha }}" \
             --arg version "${{ steps.version.outputs.version }}" \
             --arg ref "${{ github.ref_name }}" \
             --arg run_id "${{ github.run_id }}" \
             --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{commit: $sha, short_sha: $short_sha, version: $version, branch: $ref, run_id: $run_id, built_at: $timestamp}' \
-            > out/build-info.json
+            '{commit: $sha, short_sha: $short_sha, version: $version, branch: $ref, run_id: $run_id, built_at: $timestamp}')
+
+          # Write to app root (for API projects that serve static files from root)
+          echo "$BUILD_INFO" > out/build-info.json
+
+          # Also write to wwwroot if it exists (for web apps using UseStaticFiles)
+          if [ -d "out/wwwroot" ]; then
+            echo "$BUILD_INFO" > out/wwwroot/build-info.json
+            echo "✅ build-info.json written to both root and wwwroot"
+          else
+            echo "✅ build-info.json written to root"
+          fi
 
           PUBLISHED_VERSION=$(jq -r '.Application.Version' out/appsettings.json)
           if [ "$PUBLISHED_VERSION" != "${{ steps.version.outputs.version }}" ]; then
@@ -169,9 +179,6 @@ jobs:
               APP_FAILED=0
 
               # ── 1. Check if this is the first RunFromPackage deployment ──────────
-              # If WEBSITE_RUN_FROM_PACKAGE is not already set, this is a transition
-              # from file-extraction to zip-mount. We need to clear wwwroot first to
-              # avoid a conflict between old extracted files and the new zip mount.
               CURRENT_RFP=$(az webapp config appsettings list \
                 --name "$APP" \
                 --resource-group "$RESOURCE_GROUP" \
@@ -180,10 +187,8 @@ jobs:
 
               if [ -z "$CURRENT_RFP" ] || [ "$CURRENT_RFP" = "0" ]; then
                 echo "  ⚠️  First RunFromPackage deployment — clearing wwwroot to avoid mount conflict..."
-                # Stop first so we can safely clear files
                 az webapp stop --name "$APP" --resource-group "$RESOURCE_GROUP"
                 sleep 10
-                # Clear wwwroot via Kudu REST API
                 KUDU_URL="https://${APP}.scm.azurewebsites.net/api/vfs/site/wwwroot/"
                 az webapp deployment list-publishing-credentials \
                   --name "$APP" \
@@ -197,7 +202,6 @@ jobs:
                     -u "${KUDU_USER}:${KUDU_PASS}" \
                     -H "If-Match: *" 2>/dev/null && echo "  ✅ wwwroot cleared" || echo "  ⚠️  Could not clear wwwroot (non-fatal)"
                 fi
-                # Enable RunFromPackage
                 az webapp config appsettings set \
                   --name "$APP" \
                   --resource-group "$RESOURCE_GROUP" \
@@ -244,8 +248,6 @@ jobs:
               fi
 
               # ── 5. Verify ─────────────────────────────────────────────────────────
-              # Poll for up to 10 minutes (60 × 10s). On Basic tier, cold start after
-              # a RunFromPackage deploy can take 3-4 minutes.
               if [ $APP_FAILED -eq 0 ]; then
                 echo "  🔍 Verifying (expecting version: $EXPECTED_VERSION)..."
                 VERIFIED=false
@@ -255,7 +257,7 @@ jobs:
                   HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "${APP_URL}${HEALTH_PATH}" 2>/dev/null || echo "000")
 
                   if [ "$HTTP_CODE" = "200" ]; then
-                    LIVE_VERSION=$(curl -s --max-time 10 "${APP_URL}/build-info.json" 2>/dev/null | jq -r '.version // empty' 2>/dev/null || echo "")
+                    LIVE_VERSION=$(curl -s --max-time 10 "${APP_URL}${HEALTH_PATH}" 2>/dev/null | jq -r '.version // empty' 2>/dev/null || echo "")
 
                     if [ "$LIVE_VERSION" = "$EXPECTED_VERSION" ]; then
                       echo "  ✅ Verified: serving version $LIVE_VERSION"
@@ -264,13 +266,13 @@ jobs:
                     elif [ -n "$LIVE_VERSION" ]; then
                       echo "  ⏳ Serving $LIVE_VERSION, expected $EXPECTED_VERSION (attempt $i/60)"
                     else
-                      # build-info.json not available — accept HTTP 200 after a few attempts
+                      # health_path returned 200 but no version — accept after a few attempts
                       if [ "$i" -ge 5 ]; then
-                        echo "  ✅ Accepted: HTTP 200 (build-info.json unavailable)"
+                        echo "  ✅ Accepted: HTTP 200 on ${HEALTH_PATH} (version field unavailable)"
                         VERIFIED=true
                         break
                       fi
-                      echo "  ⏳ HTTP 200 but no build-info.json yet (attempt $i/60)"
+                      echo "  ⏳ HTTP 200 but no version yet (attempt $i/60)"
                     fi
                   else
                     echo "  ⏳ HTTP $HTTP_CODE (attempt $i/60)..."
@@ -283,10 +285,7 @@ jobs:
                 fi
               fi
 
-              # ── 6. Recovery — ensure app is running regardless of outcome ─────────
-              # Even if verification failed, make sure the app process is started.
-              # A failed verification means the new code may be broken, but it's better
-              # to serve a broken response than a 503 from a stopped process.
+              # ── 6. Recovery ───────────────────────────────────────────────────────
               if [ $APP_FAILED -ne 0 ]; then
                 echo ""
                 echo "  ❌ Deployment verification failed for $APP"
